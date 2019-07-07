@@ -1,0 +1,97 @@
+---
+title: "Fit2Wear-EDA"
+author: "Francine Camacho"
+date: "7/6/2019"
+output: html_document
+---
+
+```{r setup, include=FALSE, echo=FALSE}
+require("knitr")
+opts_chunk$set(echo = TRUE)
+opts_knit$set(root.dir = "~/Documents/Insight/Data_Challenge/week5")
+```
+
+```{r}
+#Load necessary libraries 
+require(tidyverse)
+require(ggsci)
+```
+Load dataset
+```{r, echo=FALSE}
+# load processed data from jupyter notebooks
+runway_df <- read_csv("renttherunway_final_data.csv", col_names = T) # unique rows 
+cat("Total dimensions (rows columns)", dim(runway_df))
+```
+
+General dataset statistics
+```{r}
+#calculate statistics for datasets 
+number_customers <- runway_df %>% distinct(user_id) %>% nrow()
+cat("Number of customers:", number_customers)
+number_items <- runway_df %>% distinct(item_id) %>% nrow()
+cat("Number of items in dataset:", number_items)
+number_customer_1_transaction = runway_df %>% group_by( user_id) %>% count() %>% filter(n==1 ) %>% nrow()
+cat("Number of customers with 1 transcation:", number_customer_1_transaction)
+fraction_small <- runway_df %>% group_by(fit) %>% count() %>% spread(., fit, n ) %>% mutate(frac_small = small/(fit + large + small)) %>% select(c(frac_small))
+cat("Fraction of customers with small fit:", fraction_small$frac_small)
+fraction_large <- runway_df %>% group_by(fit) %>% count() %>% spread(., fit, n ) %>% mutate(frac_large = large/(fit + large + small)) %>% select(c(frac_large))
+cat("Fraction of customers with large fit:", fraction_large$frac_large)
+number_product_1_transaction = runway_df %>% group_by(item_id) %>% count() %>% filter(n==1 ) %>% nrow()
+cat("Fraction of products with 1 transaction:", number_product_1_transaction)
+```
+
+Statisitcs
+```{r}
+#count how many unique user for each item in each category by fit
+runway_stat_item <- runway_df %>% group_by(item_id, fit) %>% count() %>% ungroup() %>% arrange(desc(n))
+runway_stat_item$fit[runway_stat_item$fit != "fit"] <- "nofit" # recode small and large as nofit 
+true_fit_item <- aggregate(n ~ item_id + fit, data = runway_stat_item, FUN = sum) # calculate the sum to include the recoded no fits (small and large )
+true_fit_item$n.norm <- true_fit_item$n/sum(true_fit_item$n) # normalized counts 
+true_fit_item_top <- true_fit_item %>% filter(fit == "fit") %>% arrange(desc(n.norm))%>% top_n(n=25) # take top 25 items with the highest n.norm 
+```
+
+```{r}
+#Plot the Top 25 items that are fit in dataset with normalized counts 
+true_fit_item %>% filter(item_id %in% true_fit_item_top$item_id) %>% inner_join(.,runway_df %>% select(c(item_id, category))%>% distinct()) %>%  ggplot(.,aes(x=as.factor(item_id), y =n.norm)) +  geom_col(aes(fill = fit),position = "dodge", width = .5) + coord_flip() + scale_fill_npg() + theme_minimal() + ggtitle(" Top 25 Items vs Fit-response-Normalized") + xlab("Frequency Normalized") + ylab("Item ID ") + facet_wrap(~category)
+```
+
+```{r}
+# Prepare data for Z-test 
+runway_stat_category <- runway_df %>% group_by(category, fit) %>% count() %>% ungroup() %>% arrange(desc(n))
+runway_stat_category$fit[runway_stat_category$fit != "fit"] <- "nofit" # recode small and large as nofit 
+ill_fit_category <- aggregate(n ~ category + fit, data = runway_stat_category, FUN = sum) # calculate the sum to include 
+ill_fit_category_wide <- spread(ill_fit_category, fit, n, fill = 0) %>% mutate(sumN = fit+nofit) 
+
+ill_fit_category_wide_filter <- ill_fit_category_wide %>% filter(fit>=10 & nofit>=10) # 10 successes and 10 failures for 2 Z assumptions 
+# Function to run a iterative Z-test within counts 
+iterativeZtest<-function(df, features){
+
+  features_pvalues<-list()
+  pvalues<-list()
+  i <-1
+  for (i in 1:length(features)){
+    featureDF<- df %>% filter(category == features[i]) # current feature data 
+    res<-prop.test(x = c(featureDF$fit, featureDF$nofit), n = c(featureDF$sumN, featureDF$sumN), alternative = "greater")
+    features_pvalues <- append(features_pvalues, list(features[i]))
+    pvalues<-append(pvalues, list(res$p.value))
+
+    i<-i+1
+  }
+  resultsDF<-do.call(rbind, Map(data.frame, A=features_pvalues, B=pvalues))
+  names(resultsDF) <- c("features", "pvalues")
+  #resultsDF$BH.adjusted <- p.adjust(resultsDF$pvalues, method="BH", n = length(resultsDF$pvalues)) # adjust pvalues 
+  return(resultsDF)
+  
+}
+test = iterativeZtest(ill_fit_category_wide_filter, unique(ill_fit_category_wide_filter$category))
+# no significant results 
+
+```
+
+```{r}
+
+#count how many unique user for each item in each category by fit 
+runway_stat_ill<- runway_df %>% group_by(category, fit) %>% count() %>% ungroup() %>% arrange(desc(n))
+# plot no fit log10 transformation of frequencies 
+runway_stat_ill %>% filter(fit!= "fit") %>%  ggplot(.,aes(x=as.factor(category), y =log10(n))) +  geom_col(aes(fill = fit),position = "dodge", width = .5) + coord_flip() + scale_fill_jco() + theme_minimal() + ggtitle(" Category vs Fit-response") + xlab("Category ") + ylab("log10(Frequency)")
+```
